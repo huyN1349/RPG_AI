@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Heroes of the Rift</title>
+    <style>
+        /* Global Styles */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+            background: #1a1a1a;
+            color: #ffffff;
+        }
+
+        /* Landscape Warning */
+        @media (orientation: landscape) {
+            body > * {
+                display: none;
+            }
+            body::after {
+                content: "Please rotate your device to portrait mode";
+                display: block;
+                text-align: center;
+                padding: 20px;
+                font-size: 1.5rem;
+            }
+        }
+
+        /* Game Sections */
+        #enemy-area {
+            height: 33vh;
+            background: #2d1b1b;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #battlefield {
+            height: 34vh;
+            background: #1b2d1b;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+        }
+
+        #player-area {
+            height: 33vh;
+            background: #1b1b2d;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* UI Elements */
+        .status-text {
+            font-size: 1rem;
+            margin-bottom: 5px;
+        }
+
+        button {
+            padding: 8px 16px;
+            margin: 5px;
+            background: #4a4a4a;
+            border: 1px solid #666;
+            color: white;
+            border-radius: 4px;
+            font-size: 1rem;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        #game-canvas {
+            border: 1px solid #666;
+            background: #000;
+        }
+
+        #hero-list, #enemy-list {
+            flex-grow: 1;
+            overflow-y: auto;
+        }
+
+        .hero-item, .enemy-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 5px;
+            border-bottom: 1px solid #333;
+        }
+
+        #gold-display {
+            font-size: 1.2rem;
+            color: #ffd700;
+            margin-bottom: 10px;
+        }
+
+        /* Debug Section (hidden by default) */
+        #debug-panel {
+            display: none;
+            position: fixed;
+            top: 0;
+            right: 0;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="enemy-area">
+        <div id="enemy-list"></div>
+    </div>
+    
+    <div id="battlefield">
+        <canvas id="game-canvas"></canvas>
+    </div>
+    
+    <div id="player-area">
+        <div id="gold-display">Gold: 0</div>
+        <div id="hero-list"></div>
+        <button id="recruit-btn">Recruit Hero (50 Gold)</button>
+        <button id="start-stage" style="display: none;">Start Stage</button>
+    </div>
+
+    <div id="debug-panel">
+        <button id="debug-reset">Reset Game</button>
+    </div>
+
+    <script>
+        // Section: State Management
+        let gameState = "recruitment";
+        let gold = 0;
+        let playerHeroes = [];
+        let enemies = [];
+        let needsRedraw = true;
+
+        // Section: Game Data
+        const heroes = [
+            { name: "Lara", rarity: 4, health: 100, maxHealth: 100, attack: 20, speed: 10, alive: true },
+            { name: "Korr", rarity: 2, health: 120, maxHealth: 120, attack: 15, speed: 5, alive: true },
+            { name: "Mira", rarity: 3, health: 80, maxHealth: 80, attack: 25, speed: 8, alive: true }
+        ];
+
+        const campaign = [
+            {
+                name: "Plains Skirmish",
+                enemies: [
+                    { name: "Goblin", health: 50, maxHealth: 50, attack: 10, alive: true },
+                    { name: "Orc", health: 70, maxHealth: 70, attack: 15, alive: true }
+                ]
+            }
+        ];
+
+        // Section: Canvas Setup
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        
+        function resizeCanvas() {
+            const parentWidth = canvas.parentElement.clientWidth;
+            const parentHeight = canvas.parentElement.clientHeight;
+            const size = Math.min(parentWidth, parentHeight * 0.9);
+            
+            canvas.width = size;
+            canvas.height = size * 0.6; // 3:5 ratio
+            needsRedraw = true;
+        }
+
+        // Section: Grid Drawing
+        function drawGrid() {
+            if (!needsRedraw) return;
+
+            const cellWidth = canvas.width / 5;
+            const cellHeight = canvas.height / 3;
+
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw grid lines
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 1;
+
+            // Vertical lines
+            for (let i = 1; i < 5; i++) {
+                ctx.beginPath();
+                ctx.moveTo(i * cellWidth, 0);
+                ctx.lineTo(i * cellWidth, canvas.height);
+                ctx.stroke();
+            }
+
+            // Horizontal lines
+            for (let i = 1; i < 3; i++) {
+                ctx.beginPath();
+                ctx.moveTo(0, i * cellHeight);
+                ctx.lineTo(canvas.width, i * cellHeight);
+                ctx.stroke();
+            }
+
+            // Draw heroes
+            ctx.fillStyle = '#4444ff';
+            playerHeroes.forEach((hero, index) => {
+                if (index < 3 && hero.alive) {
+                    const x = index * cellWidth;
+                    const y = 2 * cellHeight; // Bottom row
+                    
+                    // Draw hero circle
+                    ctx.beginPath();
+                    ctx.arc(x + cellWidth/2, y + cellHeight/2, cellWidth/4, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    // Draw hero name and health
+                    ctx.fillStyle = '#fff';
+                    ctx.font = '12px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(hero.name, x + cellWidth/2, y + cellHeight/4);
+                    ctx.fillText(`${hero.health}/${hero.maxHealth}`, x + cellWidth/2, y + cellHeight * 3/4);
+                    ctx.fillStyle = '#4444ff';
+                }
+            });
+
+            // Draw enemies
+            ctx.fillStyle = '#ff4444';
+            enemies.forEach((enemy, index) => {
+                if (index < 3 && enemy.alive) {
+                    const x = index * cellWidth;
+                    const y = 0; // Top row
+                    
+                    // Draw enemy square
+                    ctx.fillRect(x + cellWidth/4, y + cellHeight/4, cellWidth/2, cellHeight/2);
+                    
+                    // Draw enemy name and health
+                    ctx.fillStyle = '#fff';
+                    ctx.font = '12px Arial';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(enemy.name, x + cellWidth/2, y + cellHeight/4);
+                    ctx.fillText(`${enemy.health}/${enemy.maxHealth}`, x + cellWidth/2, y + cellHeight * 3/4);
+                    ctx.fillStyle = '#ff4444';
+                }
+            });
+
+            needsRedraw = false;
+        }
+
+        // Section: UI Updates
+        function updateGoldDisplay() {
+            document.getElementById('gold-display').textContent = `Gold: ${gold}`;
+        }
+
+        function updateHeroList() {
+            const heroList = document.getElementById('hero-list');
+            heroList.innerHTML = '';
+            
+            playerHeroes.forEach((hero, index) => {
+                const heroItem = document.createElement('div');
+                heroItem.className = 'hero-item';
+                
+                const heroInfo = document.createElement('span');
+                heroInfo.textContent = `${hero.name} - Rarity ${hero.rarity} (HP: ${hero.health}/${hero.maxHealth})`;
+                
+                const attackBtn = document.createElement('button');
+                attackBtn.textContent = 'Attack';
+                attackBtn.disabled = !hero.alive || gameState !== 'combat';
+                attackBtn.onclick = () => attackEnemy(index);
+                
+                heroItem.appendChild(heroInfo);
+                heroItem.appendChild(attackBtn);
+                heroList.appendChild(heroItem);
+            });
+        }
+
+        function updateEnemyList() {
+            const enemyList = document.getElementById('enemy-list');
+            enemyList.innerHTML = '';
+            
+            enemies.forEach(enemy => {
+                if (enemy.alive) {
+                    const enemyItem = document.createElement('div');
+                    enemyItem.className = 'enemy-item';
+                    enemyItem.textContent = `${enemy.name} - HP: ${enemy.health}/${enemy.maxHealth}`;
+                    enemyList.appendChild(enemyItem);
+                }
+            });
+        }
+
+        // Section: Game Logic
+        function recruitHero() {
+            if (gold < 50) {
+                alert('Not enough gold! Need 50 gold to recruit.');
+                return;
+            }
+
+            const hero = { ...heroes[Math.floor(Math.random() * heroes.length)] };
+            hero.alive = true;
+            hero.health = hero.maxHealth;
+            
+            playerHeroes.push(hero);
+            gold -= 50;
+            
+            updateHeroList();
+            updateGoldDisplay();
+            saveGameState();
+            needsRedraw = true;
+            drawGrid();
+
+            if (playerHeroes.length >= 1) {
+                document.getElementById('start-stage').style.display = 'block';
+            }
+        }
+
+        function startStage() {
+            if (playerHeroes.length === 0) {
+                alert('Recruit at least one hero first!');
+                return;
+            }
+
+            gameState = 'combat';
+            enemies = JSON.parse(JSON.stringify(campaign[0].enemies));
+            
+            document.getElementById('recruit-btn').disabled = true;
+            document.getElementById('start-stage').style.display = 'none';
+            
+            updateEnemyList();
+            updateHeroList();
+            needsRedraw = true;
+            drawGrid();
+        }
+
+        function attackEnemy(heroIndex) {
+            if (gameState !== 'combat') return;
+
+            const hero = playerHeroes[heroIndex];
+            if (!hero || !hero.alive) return;
+
+            // Find first living enemy
+            const enemyIndex = enemies.findIndex(e => e.alive);
+            if (enemyIndex === -1) return;
+
+            // Hero attacks enemy
+            const enemy = enemies[enemyIndex];
+            enemy.health = Math.max(0, enemy.health - hero.attack);
+            enemy.alive = enemy.health > 0;
+
+            // Visual feedback
+            needsRedraw = true;
+            drawGrid();
+
+            // Enemy dies
+            if (!enemy.alive) {
+                enemies = enemies.filter(e => e.alive);
+                updateEnemyList();
+                
+                // Check victory
+                if (enemies.length === 0) {
+                    victory();
+                    return;
+                }
+            }
+
+            // Enemy counterattack
+            if (enemy.alive) {
+                hero.health = Math.max(0, hero.health - enemy.attack);
+                hero.alive = hero.health > 0;
+                
+                if (!hero.alive) {
+                    updateHeroList();
+                    // Check defeat
+                    if (!playerHeroes.some(h => h.alive)) {
+                        defeat();
+                        return;
+                    }
+                }
+            }
+
+            updateEnemyList();
+            updateHeroList();
+            needsRedraw = true;
+            drawGrid();
+        }
+
+        function victory() {
+            gameState = 'victory';
+            const reward = 100;
+            gold += reward;
+            alert(`Victory! Earned ${reward} gold!`);
+            
+            document.getElementById('recruit-btn').disabled = false;
+            document.getElementById('start-stage').style.display = 'block';
+            
+            updateGoldDisplay();
+            saveGameState();
+        }
+
+        function defeat() {
+            gameState = 'recruitment';
+            alert('Defeat! Try recruiting more heroes or starting over.');
+            
+            document.getElementById('recruit-btn').disabled = false;
+            document.getElementById('start-stage').style.display = 'block';
+            
+            enemies = [];
+            updateEnemyList();
+            needsRedraw = true;
+            drawGrid();
+        }
+
+        // Section: Data Persistence
+        function saveGameState() {
+            try {
+                localStorage.setItem('gameState', JSON.stringify({
+                    gold,
+                    playerHeroes,
+                    gameState
+                }));
+            } catch (e) {
+                alert('Could not save game state!');
+            }
+        }
+
+        function loadGameState() {
+            try {
+                const saved = localStorage.getItem('gameState');
+                if (saved) {
+                    const state = JSON.parse(saved);
+                    gold = state.gold;
+                    playerHeroes = state.playerHeroes;
+                    gameState = state.gameState;
+                    
+                    updateGoldDisplay();
+                    updateHeroList();
+                    if (playerHeroes.length >= 1) {
+                        document.getElementById('start-stage').style.display = 'block';
+                    }
+                    needsRedraw = true;
+                    drawGrid();
+                }
+            } catch (e) {
+                console.error('Could not load game state:', e);
+            }
+        }
+
+        // Section: Debug
+        document.getElementById('debug-reset').onclick = () => {
+            localStorage.clear();
+            location.reload();
+        };
+
+        // Section: Initialization
+        window.onload = () => {
+            resizeCanvas();
+            loadGameState();
+            
+            // Add event listeners
+            document.getElementById('recruit-btn').onclick = recruitHero;
+            document.getElementById('start-stage').onclick = startStage;
+            window.onresize = resizeCanvas;
+            
+            // Initial draw
+            drawGrid();
+        };
+
+        // Enable debug panel with keyboard shortcut (Ctrl+Shift+D)
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+                const debug = document.getElementById('debug-panel');
+                debug.style.display = debug.style.display === 'none' ? 'block' : 'none';
+            }
+        });
+    </script>
+</body>
+</html> 
